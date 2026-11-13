@@ -2,6 +2,19 @@
   'use strict';
   if (window.__pip) return;
   const A = window.AndroidPip;
+  let userPaused = false, holdUntil = 0;
+
+  // make the page believe it is always visible/focused (sites pause video when "hidden")
+  try {
+    const def = (o, k, v) => Object.defineProperty(o, k, { configurable: true, get: () => v });
+    def(document, 'hidden', false);
+    def(document, 'visibilityState', 'visible');
+    def(document, 'webkitHidden', false);
+    def(document, 'webkitVisibilityState', 'visible');
+    document.hasFocus = () => true;
+  } catch (e) {}
+  ['visibilitychange', 'webkitvisibilitychange'].forEach(t =>
+    window.addEventListener(t, e => e.stopImmediatePropagation(), true));
   const sleep = t => new Promise(r => setTimeout(r, t));
 
   const area = v => {
@@ -75,8 +88,13 @@
     } finally { busy = false; report(true); }
   }
 
-  const toggle = () => { const v = best() || lastV; if (!v) return; v.paused ? v.play().catch(() => {}) : v.pause(); };
-  const pause = () => { const v = best() || lastV; if (v) v.pause(); };
+  const toggle = () => {
+    const v = best() || lastV; if (!v) return;
+    if (v.paused) { userPaused = false; v.play().catch(() => {}); }
+    else { userPaused = true; v.pause(); }
+  };
+  const pause = () => { const v = best() || lastV; userPaused = true; if (v) v.pause(); };
+  const hold = () => { holdUntil = Date.now() + 4000; };
 
   // ---------- PiP overlay: draws the active video full-window, page keeps running underneath ----------
   let cv = null, raf = 0, on = false;
@@ -104,6 +122,17 @@
     draw();
   }
 
+  // if the site pauses video while we are leaving the app / entering PiP, resume it
+  document.addEventListener('play', () => { userPaused = false; }, true);
+  document.addEventListener('pause', e => {
+    const v = e.target;
+    if (!(v instanceof HTMLMediaElement) || userPaused || v.ended) return;
+    if (Date.now() > holdUntil) return;
+    [100, 400, 1000].forEach(t => setTimeout(() => {
+      if (!userPaused && v.paused && !v.ended) v.play().catch(() => {});
+    }, t));
+  }, true);
+
   // ---------- report playing state to the app ----------
   let lastKey = '';
   function report(force) {
@@ -121,5 +150,5 @@
   setInterval(() => report(false), 2000);
   report(true);
 
-  window.__pip = { go, toggle, pause, setPip };
+  window.__pip = { go, toggle, pause, setPip, hold };
 })();

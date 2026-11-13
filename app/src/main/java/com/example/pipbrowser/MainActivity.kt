@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.res.Configuration
+import android.graphics.Bitmap
 import android.graphics.drawable.Icon
 import android.net.Uri
 import android.os.Build
@@ -17,13 +18,18 @@ import android.text.InputType
 import android.util.Rational
 import android.view.View
 import android.view.inputmethod.EditorInfo
+import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.Toast
 
 class MainActivity : Activity() {
 
@@ -35,6 +41,9 @@ class MainActivity : Activity() {
     private var playing = false
     private var ratio = 0.0
     private var lastKey = ""
+    private var desktopMode = false
+    private lateinit var mobileUa: String
+    private lateinit var desktopUa: String
 
     private val pipJs by lazy { assets.open("pip.js").bufferedReader().use { it.readText() } }
 
@@ -71,6 +80,7 @@ class MainActivity : Activity() {
             imeOptions = EditorInfo.IME_ACTION_GO
             setOnEditorActionListener { _, _, _ -> load(text.toString()); true }
         }
+        val pcBtn = Button(this).apply { text = "PC" }
         val pipBtn = Button(this).apply {
             text = "PiP"
             setOnClickListener { enterPip() }
@@ -78,6 +88,7 @@ class MainActivity : Activity() {
         bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             addView(urlBox, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(pcBtn)
             addView(pipBtn)
         }
 
@@ -85,10 +96,25 @@ class MainActivity : Activity() {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.mediaPlaybackRequiresUserGesture = false
+            settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+            settings.setSupportMultipleWindows(false)
             addJavascriptInterface(Bridge(), "AndroidPip")
             webChromeClient = WebChromeClient()
             webViewClient = object : WebViewClient() {
-                override fun onPageStarted(v: WebView, u: String, f: android.graphics.Bitmap?) {
+                override fun shouldOverrideUrlLoading(v: WebView, req: WebResourceRequest): Boolean {
+                    val u = req.url
+                    val s = u.scheme ?: return false
+                    if (s == "http" || s == "https" || s == "about" || s == "blob" || s == "data" || s == "javascript") return false
+                    // app deep links (tiktok://, instagram://, intent://): ignore, use the website instead
+                    if (s == "intent") {
+                        try {
+                            val i = Intent.parseUri(u.toString(), Intent.URI_INTENT_SCHEME)
+                            i.getStringExtra("browser_fallback_url")?.let { v.loadUrl(it) }
+                        } catch (_: Exception) {}
+                    }
+                    return true
+                }
+                override fun onPageStarted(v: WebView, u: String, f: Bitmap?) {
                     v.evaluateJavascript(pipJs, null)
                 }
                 override fun onPageFinished(v: WebView, u: String) {
@@ -97,7 +123,33 @@ class MainActivity : Activity() {
                 override fun doUpdateVisitedHistory(v: WebView, u: String, isReload: Boolean) {
                     if (!urlBox.hasFocus()) urlBox.setText(u)
                 }
+                override fun onReceivedError(v: WebView, req: WebResourceRequest, err: WebResourceError) {
+                    if (req.isForMainFrame) {
+                        Toast.makeText(this@MainActivity,
+                            "Load error: ${err.description} (${err.errorCode})", Toast.LENGTH_LONG).show()
+                    }
+                }
             }
+        }
+
+        // look like normal Chrome (sites block the default "; wv" WebView user agent)
+        val defUa = web.settings.userAgentString
+        mobileUa = defUa.replace("; wv", "").replace(Regex("Version/\\d+\\.\\d+\\s"), "")
+        val chromeVer = Regex("Chrome/([\\d.]+)").find(defUa)?.groupValues?.get(1) ?: "124.0.0.0"
+        desktopUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$chromeVer Safari/537.36"
+        web.settings.userAgentString = mobileUa
+
+        val cm = CookieManager.getInstance()
+        cm.setAcceptCookie(true)
+        cm.setAcceptThirdPartyCookies(web, true)
+
+        pcBtn.setOnClickListener {
+            desktopMode = !desktopMode
+            web.settings.userAgentString = if (desktopMode) desktopUa else mobileUa
+            web.settings.useWideViewPort = desktopMode
+            web.settings.loadWithOverviewMode = desktopMode
+            pcBtn.text = if (desktopMode) "Mobile" else "PC"
+            web.reload()
         }
 
         val root = LinearLayout(this).apply {
@@ -164,10 +216,17 @@ class MainActivity : Activity() {
         if (Build.VERSION.SDK_INT < 31 && hasVideo && playing) enterPip()
     }
 
+    override fun onPause() {
+        super.onPause()
+        // sites often pause video when the page is "hidden": keep it playing through the transition
+        js("window.__pip&&__pip.hold()")
+    }
+
     override fun onPictureInPictureModeChanged(inPip: Boolean, cfg: Configuration) {
         super.onPictureInPictureModeChanged(inPip, cfg)
         bar.visibility = if (inPip) View.GONE else View.VISIBLE
-        js("window.__pip&&__pip.setPip($inPip)")
+        if (inPip) { web.onResume(); web.resumeTimers() }
+        js("window.__pip&&(__pip.hold(),__pip.setPip($inPip))")
     }
 
     override fun onStop() {
