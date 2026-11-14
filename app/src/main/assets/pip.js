@@ -2,7 +2,10 @@
   'use strict';
   if (window.__pip) return;
   const A = window.AndroidPip;
+  const L = m => { try { A && A.log && A.log(m); } catch (e) {} };
+  const sleep = t => new Promise(r => setTimeout(r, t));
   let userPaused = false, holdUntil = 0;
+  let cv = null, raf = 0, on = false;
 
   // make the page believe it is always visible/focused (sites pause video when "hidden")
   try {
@@ -15,7 +18,6 @@
   } catch (e) {}
   ['visibilitychange', 'webkitvisibilitychange'].forEach(t =>
     window.addEventListener(t, e => e.stopImmediatePropagation(), true));
-  const sleep = t => new Promise(r => setTimeout(r, t));
 
   const area = v => {
     const r = v.getBoundingClientRect();
@@ -65,27 +67,50 @@
 
   const snap = () => { const v = best(); return { v, src: v && v.currentSrc, href: location.href }; };
   const same = (a, b) => a.v === b.v && a.src === b.src && a.href === b.href;
-  const changed = async before => {
-    for (let i = 0; i < 10; i++) { await sleep(100); if (!same(before, snap())) return true; }
+  const changed = async (before, n) => {
+    for (let i = 0; i < (n || 10); i++) { await sleep(100); if (!same(before, snap())) return true; }
     return false;
   };
 
+  // only one video should play: pause the others
+  const dedupe = keep => {
+    document.querySelectorAll('video').forEach(x => { if (x !== keep && !x.paused) x.pause(); });
+  };
+  async function ensurePlay() {
+    for (let i = 0; i < 12; i++) {
+      await sleep(250);
+      const v = best();
+      if (!v) continue;
+      dedupe(v);
+      if (v.paused && !userPaused && !v.ended) v.play().catch(() => {});
+    }
+  }
+
   let busy = false;
   async function go(dir) {
-    if (busy) return; busy = true;
+    if (busy) return;
+    busy = true; userPaused = false; holdUntil = Date.now() + 3000;
+    let how = 'none', ok = false;
     try {
       const before = snap();
       const short = isShort(before.v);
       const a = ADAPT.find(x => x.re.test(location.href));
-      let ok = false;
-      if (a && (dir > 0 ? a.next() : a.prev())) ok = await changed(before);
+      if (a && (dir > 0 ? a.next() : a.prev())) { ok = await changed(before); how = 'adapter'; }
       if (!ok && short) {
-        scrollFeed(before.v, dir); ok = await changed(before);
-        if (!ok) { pressKey(dir > 0 ? 'ArrowDown' : 'ArrowUp'); ok = await changed(before); }
+        if (A && A.swipe) { A.swipe(dir > 0); ok = await changed(before, 15); how = 'swipe'; }
+        if (!ok) { scrollFeed(before.v, dir); ok = await changed(before); how = 'scroll'; }
+        if (!ok) { pressKey(dir > 0 ? 'ArrowDown' : 'ArrowUp'); ok = await changed(before); how = 'key'; }
       }
-      if (!ok && !short && before.v) before.v.currentTime = Math.max(0, before.v.currentTime + dir * 10);
-      if (ok) { const v = best(); if (v && v.paused) v.play().catch(() => {}); }
-    } finally { busy = false; report(true); }
+      if (!ok && !short) {
+        // plain video pages: skip 10 s
+        if (before.v) before.v.currentTime = Math.max(0, before.v.currentTime + dir * 10);
+        how = 'seek';
+      }
+    } finally {
+      L('go ' + dir + ' via ' + how + ' ok=' + ok);
+      busy = false; report(true);
+      if (ok) ensurePlay();
+    }
   }
 
   const toggle = () => {
@@ -97,9 +122,9 @@
   const hold = () => { holdUntil = Date.now() + 4000; };
 
   // ---------- PiP overlay: draws the active video full-window, page keeps running underneath ----------
-  let cv = null, raf = 0, on = false;
   function setPip(flag) {
     on = !!flag;
+    L('pip overlay ' + on);
     if (!on) { cancelAnimationFrame(raf); if (cv) cv.remove(); return; }
     if (!cv) {
       cv = document.createElement('canvas');
@@ -122,16 +147,22 @@
     draw();
   }
 
-  // if the site pauses video while we are leaving the app / entering PiP, resume it
+  // if the site pauses the video on its own while we are in PiP / leaving the app, resume it
   document.addEventListener('play', () => { userPaused = false; }, true);
   document.addEventListener('pause', e => {
     const v = e.target;
-    if (!(v instanceof HTMLMediaElement) || userPaused || v.ended) return;
-    if (Date.now() > holdUntil) return;
-    [100, 400, 1000].forEach(t => setTimeout(() => {
-      if (!userPaused && v.paused && !v.ended) v.play().catch(() => {});
+    if (!(v instanceof HTMLMediaElement)) return;
+    const active = on || Date.now() < holdUntil;
+    L('pause ' + (v === lastV ? 'main' : 'other') + ' active=' + active + ' user=' + userPaused + ' ended=' + v.ended);
+    if (!active || userPaused || v.ended) return;
+    if (v !== (best() || lastV)) return;
+    [100, 400, 1000, 2000].forEach(t => setTimeout(() => {
+      if (!userPaused && v.paused && !v.ended && v === (best() || lastV)) v.play().catch(() => {});
     }, t));
   }, true);
+  setInterval(() => {
+    if (on || Date.now() < holdUntil) { const k = best(); if (k) dedupe(k); }
+  }, 800);
 
   // ---------- report playing state to the app ----------
   let lastKey = '';
