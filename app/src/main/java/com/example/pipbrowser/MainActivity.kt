@@ -59,6 +59,7 @@ class MainActivity : Activity() {
     private lateinit var urlBox: EditText
     private lateinit var pcBtn: Button
     private lateinit var cascadeBtn: Button
+    private lateinit var pipAction: String
     private var cascade = false
     private val headers = mutableListOf<Button>()
     private var lastCW = 0
@@ -72,6 +73,7 @@ class MainActivity : Activity() {
     private var playing = false
     private var lastPlayAt = 0L
     private var ratio = 0.0
+    private var lockedRatio = 0.0
     private var lastKey = ""
     private var inPipMode = false
     private var fullW = 0
@@ -111,7 +113,9 @@ class MainActivity : Activity() {
                 val key = "$p|$h|${(r * 100).toInt()}"
                 if (key == lastKey) return@runOnUiThread
                 lastKey = key
-                playing = p; hasVideo = h; ratio = r
+                playing = p; hasVideo = h
+                if (r > 0.0) ratio = r            // ignore 0 (new video still loading)
+                if (inPipMode && lockedRatio <= 0.0 && ratio > 0.0) lockedRatio = ratio
                 if (p) lastPlayAt = SystemClock.uptimeMillis()
                 addLog("state playing=$p video=$h ratio=${"%.2f".format(r)}")
                 updatePip()
@@ -129,6 +133,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        pipAction = ACTION + "." + taskId
 
         val defUa = WebSettings.getDefaultUserAgent(this)
         mobileUa = defUa.replace("; wv", "").replace(Regex("Version/\\d+\\.\\d+\\s"), "")
@@ -182,10 +187,20 @@ class MainActivity : Activity() {
             setAllCaps(false)
             setOnClickListener { if (cascade) exitCascade() else enterCascade() }
         }
+        val winBtn = Button(this).apply {
+            text = "Window"
+            setAllCaps(false)
+            setOnClickListener { openNewWindow() }
+        }
+        // compact buttons so everything fits on a phone
+        listOf(plus, closeBtn, cascadeBtn, winBtn).forEach {
+            it.minWidth = 0; it.minimumWidth = 0; it.textSize = 12f; it.setPadding(14, 0, 14, 0)
+        }
         tabBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             addView(scroll, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             addView(plus)
+            addView(winBtn)
             addView(cascadeBtn)
             addView(closeBtn)
         }
@@ -219,11 +234,31 @@ class MainActivity : Activity() {
             t.web.reload()
         }
 
-        val filter = IntentFilter(ACTION)
+        val filter = IntentFilter(pipAction)
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
         else registerReceiver(receiver, filter)
 
         newTab(intent?.dataString ?: "https://m.youtube.com/shorts")
+    }
+
+    // ---------- second window (separate task, can sit next to this one in split-screen) ----------
+    private fun openNewWindow() {
+        val i = Intent(this, MainActivity::class.java)
+            .setData(Uri.parse("https://duckduckgo.com"))
+            .addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_MULTIPLE_TASK or
+                Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT
+            )
+        if (!isInMultiWindowMode) {
+            Toast.makeText(this,
+                "New window opened. To see both: open Recents, tap the app icon on a card, choose Split screen.",
+                Toast.LENGTH_LONG).show()
+        }
+        try { startActivity(i) } catch (e: Exception) {
+            addLog("new window failed: ${e.message}")
+            Toast.makeText(this, "Could not open a new window", Toast.LENGTH_SHORT).show()
+        }
     }
 
     // ---------- cascade: all tabs shown as overlapping cards ----------
@@ -451,12 +486,12 @@ class MainActivity : Activity() {
         val h = web.height.toFloat()
         if (w <= 0f || h <= 0f) return
         val x = w / 2f
-        val a = if (slow) 0.8f else 0.75f
-        val b = if (slow) 0.2f else 0.25f
+        val a = if (slow) 0.72f else 0.75f
+        val b = if (slow) 0.28f else 0.25f
         val y0 = if (next) h * a else h * b
         val y1 = if (next) h * b else h * a
-        val steps = if (slow) 18 else 12
-        val gap = if (slow) 26L else 18L
+        val steps = if (slow) 5 else 12      // "slow" flag now means a quick flick
+        val gap = if (slow) 12L else 18L
         val down = SystemClock.uptimeMillis()
         fun send(action: Int, y: Float) {
             val e = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, x, y, 0)
@@ -464,7 +499,7 @@ class MainActivity : Activity() {
             web.dispatchTouchEvent(e)
             e.recycle()
         }
-        addLog("swipe ${if (next) "next" else "prev"}${if (slow) " (slow)" else ""}")
+        addLog("swipe ${if (next) "next" else "prev"}${if (slow) " (flick)" else ""}")
         send(MotionEvent.ACTION_DOWN, y0)
         for (i in 1..steps) ui.postDelayed({ send(MotionEvent.ACTION_MOVE, y0 + (y1 - y0) * i / steps) }, i * gap)
         ui.postDelayed({ send(MotionEvent.ACTION_UP, y1) }, (steps + 1) * gap)
@@ -474,7 +509,7 @@ class MainActivity : Activity() {
     private fun action(code: Int, tag: String, icon: Int, title: String) = RemoteAction(
         Icon.createWithResource(this, icon), title, title,
         PendingIntent.getBroadcast(
-            this, code, Intent(ACTION).setPackage(packageName).putExtra("t", tag),
+            this, code, Intent(pipAction).setPackage(packageName).putExtra("t", tag),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
     )
@@ -483,7 +518,9 @@ class MainActivity : Activity() {
         hasVideo && (playing || SystemClock.uptimeMillis() - lastPlayAt < 4000)
 
     private fun pipParams(): PictureInPictureParams {
-        val r = if (ratio > 0.0) ratio.coerceIn(0.42, 2.39) else 16.0 / 9.0
+        // while in PiP keep the window shape fixed (a changing shape reflows the page and breaks swiping)
+        val base = if (inPipMode && lockedRatio > 0.0) lockedRatio else ratio
+        val r = if (base > 0.0) base.coerceIn(0.42, 2.39) else 16.0 / 9.0
         val b = PictureInPictureParams.Builder()
             .setAspectRatio(Rational((r * 1000).toInt(), 1000))
             .setActions(listOf(
@@ -550,6 +587,7 @@ class MainActivity : Activity() {
         super.onPictureInPictureModeChanged(inPip, cfg)
         addLog("pip mode $inPip")
         inPipMode = inPip
+        lockedRatio = if (inPip) ratio else 0.0
         if (inPip) exitCascade()
         bar.visibility = if (inPip) View.GONE else View.VISIBLE
         tabBar.visibility = if (inPip) View.GONE else View.VISIBLE

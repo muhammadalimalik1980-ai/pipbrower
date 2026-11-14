@@ -71,7 +71,12 @@
     for (let i = 0; i < (n || 10); i++) {
       await sleep(100);
       const c = snap();
-      if (!same(before, c) || (before.t > 1 && c.v && c.t < before.t - 0.5)) return true;
+      let why = '';
+      if (c.v !== before.v) why = 'element';
+      else if (c.href !== before.href) why = 'url';
+      else if (c.src !== before.src) why = 'src';
+      else if (before.t > 1 && c.v && c.t < before.t - 0.5) why = 'restart';
+      if (why) { L('changed: ' + why); return true; }
     }
     return false;
   };
@@ -102,8 +107,10 @@
       if (a && (dir > 0 ? a.next() : a.prev())) { ok = await changed(before); how = 'adapter'; }
       if (!ok && short) {
         if (A && A.swipe) {
-          A.swipe(dir > 0, false); ok = await changed(before, 25); how = 'swipe';
-          if (!ok) { A.swipe(dir > 0, true); ok = await changed(before, 25); how = 'swipe-slow'; }
+          A.swipe(dir > 0, false); ok = await changed(before, 15); how = 'swipe';
+          if (!ok) { A.swipe(dir > 0, true); ok = await changed(before, 15); how = 'flick'; }
+          if (!ok) { scrollFeed(before.v, dir); ok = await changed(before, 10); how = 'scroll'; }
+          if (!ok) { pressKey(dir > 0 ? 'ArrowDown' : 'ArrowUp'); ok = await changed(before, 10); how = 'key'; }
         } else {
           scrollFeed(before.v, dir); ok = await changed(before); how = 'scroll';
           if (!ok) { pressKey(dir > 0 ? 'ArrowDown' : 'ArrowUp'); ok = await changed(before); how = 'key'; }
@@ -170,7 +177,7 @@
     if (rc.n >= 3) return;
     rc.n++;
     [150, 800].forEach(t => setTimeout(() => {
-      if (!userPaused && v.paused && !v.ended && v === (best() || lastV)) v.play().catch(() => {});
+      if (!userPaused && v.paused && !v.ended && v === (best() || lastV)) { L('resume play'); v.play().catch(() => {}); }
     }, t));
   }, true);
 
