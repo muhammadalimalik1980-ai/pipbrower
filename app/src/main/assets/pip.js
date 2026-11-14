@@ -65,16 +65,20 @@
       for (const type of ['keydown', 'keyup']) t.dispatchEvent(new KeyboardEvent(type, o));
   };
 
-  const snap = () => { const v = best(); return { v, src: v && v.currentSrc, href: location.href }; };
+  const snap = () => { const v = best(); return { v, src: v && v.currentSrc, href: location.href, t: v ? v.currentTime : 0 }; };
   const same = (a, b) => a.v === b.v && a.src === b.src && a.href === b.href;
   const changed = async (before, n) => {
-    for (let i = 0; i < (n || 10); i++) { await sleep(100); if (!same(before, snap())) return true; }
+    for (let i = 0; i < (n || 10); i++) {
+      await sleep(100);
+      const c = snap();
+      if (!same(before, c) || (before.t > 1 && c.v && c.t < before.t - 0.5)) return true;
+    }
     return false;
   };
 
   // only one video should play: pause the others
   const dedupe = keep => {
-    document.querySelectorAll('video').forEach(x => { if (x !== keep && !x.paused) x.pause(); });
+    document.querySelectorAll('video').forEach(x => { if (x !== keep && !x.paused && !x.muted && x.volume > 0) x.pause(); });
   };
   async function ensurePlay() {
     for (let i = 0; i < 12; i++) {
@@ -97,9 +101,13 @@
       const a = ADAPT.find(x => x.re.test(location.href));
       if (a && (dir > 0 ? a.next() : a.prev())) { ok = await changed(before); how = 'adapter'; }
       if (!ok && short) {
-        if (A && A.swipe) { A.swipe(dir > 0); ok = await changed(before, 15); how = 'swipe'; }
-        if (!ok) { scrollFeed(before.v, dir); ok = await changed(before); how = 'scroll'; }
-        if (!ok) { pressKey(dir > 0 ? 'ArrowDown' : 'ArrowUp'); ok = await changed(before); how = 'key'; }
+        if (A && A.swipe) {
+          A.swipe(dir > 0, false); ok = await changed(before, 25); how = 'swipe';
+          if (!ok) { A.swipe(dir > 0, true); ok = await changed(before, 25); how = 'swipe-slow'; }
+        } else {
+          scrollFeed(before.v, dir); ok = await changed(before); how = 'scroll';
+          if (!ok) { pressKey(dir > 0 ? 'ArrowDown' : 'ArrowUp'); ok = await changed(before); how = 'key'; }
+        }
       }
       if (!ok && !short) {
         // plain video pages: skip 10 s
@@ -156,17 +164,19 @@
     L('pause ' + (v === lastV ? 'main' : 'other') + ' active=' + active + ' user=' + userPaused + ' ended=' + v.ended);
     if (!active || userPaused || v.ended) return;
     if (v !== (best() || lastV)) return;
-    [100, 400, 1000, 2000].forEach(t => setTimeout(() => {
+    const now = Date.now();
+    const rc = v.__rc || (v.__rc = { n: 0, t: now });
+    if (now - rc.t > 6000) { rc.n = 0; rc.t = now; }
+    if (rc.n >= 3) return;
+    rc.n++;
+    [150, 800].forEach(t => setTimeout(() => {
       if (!userPaused && v.paused && !v.ended && v === (best() || lastV)) v.play().catch(() => {});
     }, t));
   }, true);
-  setInterval(() => {
-    if (on || Date.now() < holdUntil) { const k = best(); if (k) dedupe(k); }
-  }, 800);
 
   // ---------- report playing state to the app ----------
-  let lastKey = '';
-  function report(force) {
+  let lastKey = '', rt = 0;
+  function doReport(force) {
     if (!A) return;
     const v = best() || lastV;
     const playing = !!(v && !v.paused && !v.ended);
@@ -176,10 +186,15 @@
     lastKey = key;
     try { A.onState(playing, !!v, ratio); } catch (e) {}
   }
+  function report(force) {
+    if (force) { clearTimeout(rt); doReport(true); return; }
+    clearTimeout(rt);
+    rt = setTimeout(() => doReport(false), 500);
+  }
   ['play', 'playing', 'pause', 'ended', 'loadedmetadata', 'emptied'].forEach(e =>
     document.addEventListener(e, () => report(false), true));
   setInterval(() => report(false), 2000);
   report(true);
 
-  window.__pip = { go, toggle, pause, setPip, hold };
+  window.__pip = { go, toggle, pause, setPip, hold, report: () => report(true) };
 })();
