@@ -90,6 +90,10 @@ class MainActivity : Activity() {
     private var lastKey = ""
     private var inPipMode = false
     private var fullW = 0
+    // YouTube PiP: a fresh copy of the page (like the floating window) is shown inside the PiP window
+    private var pipWeb: WebView? = null
+    private var pendingStartAt = 0.0
+    private val activeWeb: WebView get() = pipWeb ?: web
     private lateinit var mobileUa: String
     private lateinit var desktopUa: String
 
@@ -122,7 +126,7 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun onState(p: Boolean, h: Boolean, r: Double) {
             runOnUiThread {
-                if (tabs.isEmpty() || owner !== web) return@runOnUiThread
+                if (tabs.isEmpty() || owner !== activeWeb) return@runOnUiThread
                 val key = "$p|$h|${(r * 100).toInt()}"
                 if (key == lastKey) return@runOnUiThread
                 lastKey = key
@@ -140,7 +144,7 @@ class MainActivity : Activity() {
 
         @JavascriptInterface
         fun swipe(next: Boolean, style: Int) {
-            runOnUiThread { if (tabs.isNotEmpty() && owner === web) doSwipe(next, style) }
+            runOnUiThread { if (tabs.isNotEmpty() && owner === activeWeb) doSwipe(next, style) }
         }
     }
 
@@ -508,6 +512,10 @@ class MainActivity : Activity() {
             override fun onPageFinished(v: WebView, u: String) {
                 v.evaluateJavascript(pipJs, null)
                 reapplyPip(v)
+                if (v === web && pendingStartAt > 1) {
+                    v.evaluateJavascript("window.__pip&&__pip.startAt($pendingStartAt)", null)
+                    pendingStartAt = 0.0
+                }
             }
             override fun doUpdateVisitedHistory(v: WebView, u: String, isReload: Boolean) {
                 if (tabs.isNotEmpty() && v === web && !urlBox.hasFocus()) urlBox.setText(displayUrl(u))
@@ -598,13 +606,13 @@ class MainActivity : Activity() {
 
     // a new page document has no PiP picture layer yet: add it again (otherwise PiP shows the raw page)
     private fun reapplyPip(v: WebView) {
-        if (inPipMode && tabs.isNotEmpty() && v === web) {
+        if (inPipMode && pipWeb == null && tabs.isNotEmpty() && v === web) {
             v.evaluateJavascript("window.__pip&&(__pip.hold(),__pip.setPip(true))", null)
         }
     }
 
     private fun js(code: String) {
-        if (tabs.isNotEmpty()) web.evaluateJavascript(code, null)
+        if (tabs.isNotEmpty()) activeWeb.evaluateJavascript(code, null)
     }
 
     private fun load(input: String) {
@@ -627,8 +635,9 @@ class MainActivity : Activity() {
     // real finger swipe on the page (works on touch-based short-video feeds)
     // style 0 = normal, 1 = long and smooth, 2 = quick flick
     private fun doSwipe(next: Boolean, style: Int) {
-        val w = web.width.toFloat()
-        val h = web.height.toFloat()
+        val target = activeWeb
+        val w = target.width.toFloat()
+        val h = target.height.toFloat()
         if (w <= 0f || h <= 0f) return
         val fx = w / 2f
         val a = when (style) { 1 -> 0.85f; 2 -> 0.72f; else -> 0.70f }
@@ -655,7 +664,7 @@ class MainActivity : Activity() {
                 arrayOf(pp), arrayOf(pc), 0, 0, 1f, 1f,
                 touchDeviceId, 0, InputDevice.SOURCE_TOUCHSCREEN, 0
             )
-            web.dispatchTouchEvent(e)
+            target.dispatchTouchEvent(e)
             e.recycle()
         }
         addLog("swipe ${if (next) "next" else "prev"} style=$style")
@@ -704,6 +713,25 @@ class MainActivity : Activity() {
     // keep the page laid out at normal size inside the small PiP window (avoids tiny-viewport reflow)
     private fun applyPipScale() {
         if (tabs.isEmpty()) return
+        val cw = pipWeb
+        if (cw != null) {
+            val w0 = container.width
+            val h0 = container.height
+            if (w0 <= 0 || h0 <= 0) return
+            val virtW = dp(360)
+            val sc = w0.toFloat() / virtW
+            val vh = (h0 / sc).toInt()
+            val lp0 = cw.layoutParams
+            if (lp0 == null || lp0.width != virtW || lp0.height != vh) {
+                cw.layoutParams = FrameLayout.LayoutParams(virtW, vh)
+                addLog("pip clone layout window=${w0}x$h0 page=${virtW}x$vh")
+            }
+            cw.pivotX = 0f
+            cw.pivotY = 0f
+            cw.scaleX = sc
+            cw.scaleY = sc
+            return
+        }
         val rw = container.width
         val rh = container.height
         if (rw <= 0 || rh <= 0 || fullW <= 0) return
@@ -718,6 +746,81 @@ class MainActivity : Activity() {
         web.pivotY = 0f
         web.scaleX = s
         web.scaleY = s
+    }
+
+    private fun shouldClone(): Boolean =
+        tabs.isNotEmpty() && (web.url ?: "").contains("youtube.com")
+
+    private fun startPipClone() {
+        val pageUrl = web.url ?: return
+        val desktop = tabs[cur].desktop
+        web.evaluateJavascript(
+            "(function(){try{return window.__pip&&__pip.time?__pip.time():0}catch(e){return 0}})()"
+        ) { r ->
+            if (!inPipMode || pipWeb != null) return@evaluateJavascript
+            val t0 = r?.trim('"')?.toDoubleOrNull() ?: 0.0
+            val w = WebView(this)
+            val st = w.settings
+            st.javaScriptEnabled = true
+            st.domStorageEnabled = true
+            st.mediaPlaybackRequiresUserGesture = false
+            st.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+            st.userAgentString = if (desktop) desktopUa else mobileUa
+            if (desktop) { st.useWideViewPort = true; st.loadWithOverviewMode = true }
+            CookieManager.getInstance().setAcceptThirdPartyCookies(w, true)
+            w.addJavascriptInterface(Bridge(w), "AndroidPip")
+            w.webChromeClient = WebChromeClient()
+            var startApplied = false
+            w.webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(v: WebView, req: WebResourceRequest): Boolean {
+                    val sc = req.url.scheme ?: return false
+                    return !(sc == "http" || sc == "https" || sc == "about" || sc == "blob" || sc == "data" || sc == "javascript")
+                }
+                override fun onPageStarted(v: WebView, u: String, f: Bitmap?) {
+                    v.evaluateJavascript(pipJs, null)
+                }
+                override fun onPageFinished(v: WebView, u: String) {
+                    v.evaluateJavascript(pipJs, null)
+                    var cmd = "window.__pip&&(__pip.hold(),__pip.setPip(true),__pip.setSound(true)"
+                    if (!startApplied && t0 > 1) { cmd += ",__pip.startAt($t0)"; startApplied = true }
+                    cmd += ")"
+                    v.evaluateJavascript(cmd, null)
+                }
+            }
+            container.addView(w, FrameLayout.LayoutParams(1, 1))
+            pipWeb = w
+            web.visibility = View.GONE
+            web.evaluateJavascript("window.__pip&&__pip.pause()", null)   // the copy plays instead
+            applyPipScale()
+            w.loadUrl(pageUrl)
+            addLog("pip clone started at ${t0.toInt()}s")
+        }
+    }
+
+    private fun endPipClone() {
+        val w = pipWeb ?: return
+        pipWeb = null
+        val clonedUrl = w.url
+        w.evaluateJavascript(
+            "(function(){try{return window.__pip&&__pip.info?__pip.info():'0|1'}catch(e){return '0|1'}})()"
+        ) { r ->
+            val parts = (r ?: "").trim('"').split("|")
+            val t = parts.getOrNull(0)?.toDoubleOrNull() ?: 0.0
+            val paused = parts.getOrNull(1) == "1"
+            container.removeView(w)
+            w.destroy()
+            if (tabs.isEmpty()) return@evaluateJavascript
+            web.visibility = View.VISIBLE
+            val mainUrl = web.url
+            if (clonedUrl != null && clonedUrl != mainUrl) {
+                pendingStartAt = t
+                web.loadUrl(clonedUrl)
+            } else {
+                val resumeCall = if (paused) "" else ",__pip.resume()"
+                web.evaluateJavascript("window.__pip&&(__pip.startAt($t)$resumeCall)", null)
+            }
+            addLog("pip clone ended at ${t.toInt()}s paused=$paused")
+        }
     }
 
     private fun resetScale() {
@@ -755,11 +858,17 @@ class MainActivity : Activity() {
         if (inPip) progress.visibility = View.GONE
         if (inPip) {
             if (tabs.isNotEmpty()) { web.onResume(); web.resumeTimers() }
-            root.post { applyPipScale() }
+            if (shouldClone()) {
+                startPipClone()
+            } else {
+                root.post { applyPipScale() }
+                js("window.__pip&&(__pip.hold(),__pip.setPip(true))")
+            }
         } else {
+            endPipClone()
             resetScale()
+            js("window.__pip&&(__pip.hold(),__pip.setPip(false))")
         }
-        js("window.__pip&&(__pip.hold(),__pip.setPip($inPip))")
     }
 
     override fun onStop() {
@@ -778,6 +887,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         unregisterReceiver(receiver)
+        pipWeb?.destroy()
         tabs.forEach { it.web.destroy() }
         super.onDestroy()
     }

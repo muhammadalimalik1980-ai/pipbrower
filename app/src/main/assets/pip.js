@@ -258,5 +258,11 @@
   };
   setInterval(() => { if (sound) unmute(); }, 600);
 
-  window.__pip = { go, toggle, pause, setPip, hold, startAt, time, setSound, toggleSound, report: () => report(true) };
+  const info = () => {
+    const v = best() || lastV;
+    return v ? (Math.round(v.currentTime * 10) / 10) + '|' + (v.paused ? 1 : 0) : '0|1';
+  };
+  const resume = () => { userPaused = false; const v = best() || lastV; if (v && v.paused) v.play().catch(() => {}); };
+
+  window.__pip = { go, toggle, pause, setPip, hold, startAt, time, info, resume, setSound, toggleSound, report: () => report(true) };
 })();
