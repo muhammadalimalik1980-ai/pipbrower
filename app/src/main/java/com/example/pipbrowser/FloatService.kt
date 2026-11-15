@@ -260,7 +260,7 @@ class FloatService : Service() {
                 }
                 override fun onPageFinished(v: WebView, u: String) {
                     v.evaluateJavascript(pipJs, null)
-                    var cmd = "window.__pip&&(__pip.hold(),__pip.setPip(true)"
+                    var cmd = "window.__pip&&(__pip.hold(),__pip.setPip(true),__pip.setSound(true)"
                     if (!startApplied && startAt > 1) { cmd += ",__pip.startAt($startAt)"; startApplied = true }
                     cmd += ")"
                     v.evaluateJavascript(cmd, null)
@@ -314,12 +314,21 @@ class FloatService : Service() {
                 orientation = LinearLayout.HORIZONTAL
                 setBackgroundColor(Color.parseColor("#99000000"))
             }
+            val soundBtn = ib(android.R.drawable.ic_lock_silent_mode_off, "Sound on or off") {}
+            soundBtn.setOnClickListener {
+                web.evaluateJavascript("window.__pip&&__pip.toggleSound()") { r ->
+                    soundBtn.setImageResource(
+                        if (r == "true") android.R.drawable.ic_lock_silent_mode_off
+                        else android.R.drawable.ic_lock_silent_mode)
+                }
+            }
             val pb = ib(android.R.drawable.ic_media_pause, "Play or pause") { js("window.__pip&&__pip.toggle()") }
             playBtn = pb
             listOf(
                 ib(android.R.drawable.ic_media_previous, "Previous") { js("window.__pip&&__pip.go(-1)") },
                 pb,
                 ib(android.R.drawable.ic_media_next, "Next") { js("window.__pip&&__pip.go(1)") },
+                soundBtn,
                 ib(android.R.drawable.ic_menu_close_clear_cancel, "Close") { close() }
             ).forEach {
                 controls.addView(it, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))

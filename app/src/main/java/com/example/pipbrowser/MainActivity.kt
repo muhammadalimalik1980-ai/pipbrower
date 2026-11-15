@@ -442,9 +442,11 @@ class MainActivity : Activity() {
             }
             override fun onPageStarted(v: WebView, u: String, f: Bitmap?) {
                 v.evaluateJavascript(pipJs, null)
+                reapplyPip(v)
             }
             override fun onPageFinished(v: WebView, u: String) {
                 v.evaluateJavascript(pipJs, null)
+                reapplyPip(v)
             }
             override fun doUpdateVisitedHistory(v: WebView, u: String, isReload: Boolean) {
                 if (tabs.isNotEmpty() && v === web && !urlBox.hasFocus()) urlBox.setText(u)
@@ -510,6 +512,13 @@ class MainActivity : Activity() {
                     setOnClickListener { selectTab(i) }
                 })
             }
+        }
+    }
+
+    // a new page document has no PiP picture layer yet: add it again (otherwise PiP shows the raw page)
+    private fun reapplyPip(v: WebView) {
+        if (inPipMode && tabs.isNotEmpty() && v === web) {
+            v.evaluateJavascript("window.__pip&&(__pip.hold(),__pip.setPip(true))", null)
         }
     }
 

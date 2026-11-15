@@ -4,7 +4,7 @@
   const A = window.AndroidPip;
   const L = m => { try { A && A.log && A.log(m); } catch (e) {} };
   const sleep = t => new Promise(r => setTimeout(r, t));
-  let userPaused = false, holdUntil = 0;
+  let userPaused = false, holdUntil = 0, sound = false;
   let cv = null, raf = 0, on = false;
 
   // make the page believe it is always visible/focused (sites pause video when "hidden")
@@ -155,6 +155,7 @@
     cancelAnimationFrame(raf);
     const draw = () => {
       if (!on) return;
+      if (!cv.isConnected && document.documentElement) document.documentElement.appendChild(cv);
       const v = best() || lastV, w = innerWidth, h = innerHeight;
       if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
       const c = cv.getContext('2d');
@@ -224,5 +225,19 @@
   };
   const time = () => { const v = best() || lastV; return v ? v.currentTime : 0; };
 
-  window.__pip = { go, toggle, pause, setPip, hold, startAt, time, report: () => report(true) };
+  // floating windows start without any tap, so sites begin muted: force sound on (can be toggled)
+  const unmute = () => {
+    const v = best() || lastV;
+    if (v && (v.muted || v.volume === 0)) { try { v.muted = false; v.volume = 1; } catch (e) {} }
+  };
+  const setSound = f => { sound = !!f; if (sound) unmute(); };
+  const toggleSound = () => {
+    sound = !sound;
+    const v = best() || lastV;
+    if (v) { try { v.muted = !sound; if (sound) v.volume = 1; } catch (e) {} }
+    return sound;
+  };
+  setInterval(() => { if (sound) unmute(); }, 600);
+
+  window.__pip = { go, toggle, pause, setPip, hold, startAt, time, setSound, toggleSound, report: () => report(true) };
 })();
