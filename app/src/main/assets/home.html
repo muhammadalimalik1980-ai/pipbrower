@@ -1,0 +1,30 @@
+<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PiP Browser</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:radial-gradient(1200px 600px at 50% -10%,#24324f 0%,#121212 60%);
+ color:#e8eaed;font-family:system-ui,Roboto,sans-serif;display:flex;flex-direction:column;align-items:center;padding:56px 20px 24px}
+h1{font-size:28px;font-weight:600;margin:0 0 4px;letter-spacing:.2px}
+p.sub{margin:0 0 28px;color:#9aa0a6;font-size:14px;text-align:center}
+form{width:100%;max-width:520px}
+input{width:100%;padding:15px 20px;border-radius:28px;border:1px solid #3c4043;background:#2a2b31;color:#fff;font-size:16px;outline:none}
+input:focus{border-color:#8ab4f8}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:34px;width:100%;max-width:520px}
+a.t{display:flex;flex-direction:column;align-items:center;text-decoration:none;color:#e8eaed;font-size:12px}
+a.t i{width:56px;height:56px;border-radius:18px;display:flex;align-items:center;justify-content:center;
+ font-style:normal;font-weight:700;font-size:22px;color:#fff;margin-bottom:8px}
+.tip{margin-top:40px;max-width:420px;background:#1e1f24;border:1px solid #2f3136;border-radius:16px;padding:14px 16px;color:#b0b4ba;font-size:13px;line-height:1.5}
+.tip b{color:#8ab4f8}
+</style></head><body>
+<h1>PiP Browser</h1>
+<p class="sub">Watch videos in picture-in-picture or floating windows</p>
+<form action="https://duckduckgo.com/" method="get"><input name="q" placeholder="Search the web" autocomplete="off"></form>
+<div class="grid">
+<a class="t" href="https://m.youtube.com/shorts"><i style="background:#e53935">Y</i>YouTube</a>
+<a class="t" href="https://www.tiktok.com/"><i style="background:#212121;border:1px solid #444">T</i>TikTok</a>
+<a class="t" href="https://www.instagram.com/reels/"><i style="background:linear-gradient(135deg,#f58529,#dd2a7b,#8134af)">I</i>Reels</a>
+<a class="t" href="https://m.facebook.com/"><i style="background:#1877f2">f</i>Facebook</a>
+</div>
+<div class="tip">Start a video, then tap <b>PiP</b> or <b>Float</b> in the top bar. Use the <b>menu</b> for tabs, new window and desktop site.</div>
+</body></html>

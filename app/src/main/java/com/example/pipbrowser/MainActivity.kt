@@ -9,10 +9,13 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.Icon
+import android.graphics.drawable.RippleDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -21,7 +24,9 @@ import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
 import android.text.InputType
+import android.text.TextUtils
 import android.util.Rational
+import android.view.Gravity
 import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
@@ -39,7 +44,12 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
+import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.PopupMenu
+import android.widget.ProgressBar
+import android.widget.TextView
 import android.widget.Toast
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -58,8 +68,10 @@ class MainActivity : Activity() {
     private lateinit var container: FrameLayout
     private lateinit var root: LinearLayout
     private lateinit var urlBox: EditText
-    private lateinit var pcBtn: Button
-    private lateinit var cascadeBtn: Button
+    private lateinit var progress: ProgressBar
+    private val BG = Color.parseColor("#121212")
+    private val SURFACE = Color.parseColor("#2A2B31")
+    private val ACCENT = Color.parseColor("#8AB4F8")
     private lateinit var pipAction: String
     private var cascade = false
     private val headers = mutableListOf<Button>()
@@ -142,88 +154,71 @@ class MainActivity : Activity() {
         desktopUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$chromeVer Safari/537.36"
 
         urlBox = EditText(this).apply {
-            hint = "Search or enter address"
+            hint = "Search or type address"
+            setHintTextColor(Color.parseColor("#9AA0A6"))
+            setTextColor(Color.WHITE)
+            textSize = 14f
             maxLines = 1
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             imeOptions = EditorInfo.IME_ACTION_GO
+            background = rounded(SURFACE, 22)
+            setPadding(dp(16), 0, dp(16), 0)
+            setSelectAllOnFocus(true)
             setOnEditorActionListener { _, _, _ -> load(text.toString()); true }
         }
-        val logBtn = Button(this).apply {
-            text = "Log"
-            setOnClickListener {
-                val text = synchronized(logs) { logs.joinToString("\n") }
-                AlertDialog.Builder(this@MainActivity).setTitle("Log")
-                    .setMessage(if (text.isEmpty()) "(empty)" else text)
-                    .setPositiveButton("OK", null).show()
-            }
-        }
-        pcBtn = Button(this).apply { text = "PC" }
-        val pipBtn = Button(this).apply {
-            text = "PiP"
-            setOnClickListener { enterPip() }
-        }
-        val floatBtn = Button(this).apply {
-            text = "Float"
-            setAllCaps(false)
-            setOnClickListener { startFloat() }
-        }
-        listOf(logBtn, pcBtn, pipBtn, floatBtn).forEach {
-            it.minWidth = 0; it.minimumWidth = 0; it.textSize = 12f; it.setPadding(14, 0, 14, 0)
-        }
+        val backBtn = iconBtn(R.drawable.ic_back, "Back", Color.WHITE) { goBackAction() }
+        val pipBtn = iconBtn(R.drawable.ic_pip, "Picture in picture", ACCENT) { enterPip() }
+        val floatBtn = iconBtn(R.drawable.ic_float, "Floating window", ACCENT) { startFloat() }
+        val menuBtn = iconBtn(R.drawable.ic_more, "Menu", Color.WHITE) { showMenu(it) }
         bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            addView(urlBox, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            addView(logBtn)
-            addView(pcBtn)
-            addView(pipBtn)
-            addView(floatBtn)
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(BG)
+            setPadding(dp(6), dp(6), dp(6), dp(4))
+            addView(backBtn, LinearLayout.LayoutParams(dp(40), dp(40)))
+            addView(urlBox, LinearLayout.LayoutParams(0, dp(42), 1f).apply { setMargins(dp(4), 0, dp(4), 0) })
+            addView(pipBtn, LinearLayout.LayoutParams(dp(40), dp(40)))
+            addView(floatBtn, LinearLayout.LayoutParams(dp(40), dp(40)))
+            addView(menuBtn, LinearLayout.LayoutParams(dp(40), dp(40)))
         }
 
-        tabRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            progressTintList = ColorStateList.valueOf(ACCENT)
+            visibility = View.GONE
+        }
+
+        tabRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
         val scroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             addView(tabRow)
         }
-        val plus = Button(this).apply {
-            text = "+"
-            setOnClickListener { newTab("https://duckduckgo.com") }
-        }
-        val closeBtn = Button(this).apply {
-            text = "X"
-            setOnClickListener { closeCurrentTab() }
-        }
-        cascadeBtn = Button(this).apply {
-            text = "Cascade"
-            setAllCaps(false)
-            setOnClickListener { if (cascade) exitCascade() else enterCascade() }
-        }
-        val winBtn = Button(this).apply {
-            text = "Window"
-            setAllCaps(false)
-            setOnClickListener { openNewWindow() }
-        }
-        // compact buttons so everything fits on a phone
-        listOf(plus, closeBtn, cascadeBtn, winBtn).forEach {
-            it.minWidth = 0; it.minimumWidth = 0; it.textSize = 12f; it.setPadding(14, 0, 14, 0)
-        }
+        val plus = iconBtn(R.drawable.ic_add, "New tab", Color.WHITE) { newTab(HOME) }
         tabBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            addView(scroll, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            addView(plus)
-            addView(winBtn)
-            addView(cascadeBtn)
-            addView(closeBtn)
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(BG)
+            setPadding(dp(8), 0, dp(4), dp(6))
+            addView(scroll, LinearLayout.LayoutParams(0, dp(34), 1f))
+            addView(plus, LinearLayout.LayoutParams(dp(34), dp(34)))
         }
 
         container = FrameLayout(this)
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            setBackgroundColor(BG)
             addView(bar)
+            addView(progress, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(2)))
             addView(tabBar)
             addView(container, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
         }
         setContentView(root)
+        window.statusBarColor = BG
+        window.navigationBarColor = BG
 
         // remember the normal (full screen) page width; in PiP keep that width and scale down
         container.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
@@ -236,19 +231,79 @@ class MainActivity : Activity() {
             }
         }
 
-        pcBtn.setOnClickListener {
-            val t = tabs[cur]
-            t.desktop = !t.desktop
-            applyUa(t)
-            pcBtn.text = if (t.desktop) "Mobile" else "PC"
-            t.web.reload()
-        }
-
         val filter = IntentFilter(pipAction)
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
         else registerReceiver(receiver, filter)
 
-        newTab(intent?.dataString ?: "https://m.youtube.com/shorts")
+        newTab(intent?.dataString ?: HOME)
+    }
+
+    // ---------- look & feel helpers ----------
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    private fun rounded(color: Int, radiusDp: Int) = GradientDrawable().apply {
+        setColor(color)
+        cornerRadius = dp(radiusDp).toFloat()
+    }
+
+    private fun iconBtn(res: Int, desc: String, tint: Int, onClick: (View) -> Unit): ImageButton {
+        return ImageButton(this).apply {
+            setImageResource(res)
+            setColorFilter(tint)
+            contentDescription = desc
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            background = RippleDrawable(
+                ColorStateList.valueOf(Color.parseColor("#33FFFFFF")), null,
+                GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.WHITE) })
+            setOnClickListener { onClick(it) }
+        }
+    }
+
+    private fun displayUrl(u: String?): String =
+        if (u == null || u.startsWith(HOME_BASE)) "" else u
+
+    private fun loadHome(w: WebView) {
+        val html = assets.open("home.html").bufferedReader().use { it.readText() }
+        w.loadDataWithBaseURL(HOME_BASE, html, "text/html", "utf-8", HOME_BASE)
+    }
+
+    private fun goBackAction() {
+        if (cascade) exitCascade() else if (tabs.isNotEmpty() && web.canGoBack()) web.goBack()
+    }
+
+    private fun showMenu(anchor: View) {
+        val pm = PopupMenu(this, anchor)
+        val t = tabs[cur]
+        pm.menu.add(0, 1, 0, "New tab")
+        pm.menu.add(0, 2, 1, "Reload")
+        pm.menu.add(0, 3, 2, if (t.desktop) "Mobile site" else "Desktop site")
+        pm.menu.add(0, 4, 3, if (cascade) "Normal view" else "Cascade tabs")
+        pm.menu.add(0, 5, 4, "New window")
+        pm.menu.add(0, 6, 5, "Home page")
+        pm.menu.add(0, 7, 6, "Log")
+        pm.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                1 -> newTab(HOME)
+                2 -> web.reload()
+                3 -> { t.desktop = !t.desktop; applyUa(t); t.web.reload() }
+                4 -> { if (cascade) exitCascade() else enterCascade() }
+                5 -> openNewWindow()
+                6 -> loadHome(web)
+                7 -> showLog()
+            }
+            true
+        }
+        pm.show()
+    }
+
+    private fun showLog() {
+        val text = synchronized(logs) { logs.joinToString("\n") }
+        AlertDialog.Builder(this)
+            .setTitle("Log")
+            .setMessage(if (text.isEmpty()) "(empty)" else text)
+            .setPositiveButton("OK", null)
+            .show()
     }
 
     // ---------- floating window: current video in a small window drawn over other apps ----------
@@ -265,6 +320,10 @@ class MainActivity : Activity() {
         }
         val pageUrl = web.url
         if (pageUrl.isNullOrBlank()) return
+        if (pageUrl.startsWith(HOME_BASE)) {
+            Toast.makeText(this, "Open a video page first, then tap Float.", Toast.LENGTH_SHORT).show()
+            return
+        }
         val desktop = tabs[cur].desktop
         web.evaluateJavascript(
             "(function(){try{return window.__pip&&__pip.time?__pip.time():0}catch(e){return 0}})()"
@@ -292,7 +351,6 @@ class MainActivity : Activity() {
     // ---------- second window (separate task, can sit next to this one in split-screen) ----------
     private fun openNewWindow() {
         val i = Intent(this, MainActivity::class.java)
-            .setData(Uri.parse("https://duckduckgo.com"))
             .addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK or
                 Intent.FLAG_ACTIVITY_MULTIPLE_TASK or
@@ -316,14 +374,12 @@ class MainActivity : Activity() {
             return
         }
         cascade = true
-        cascadeBtn.text = "Normal"
         applyCascade()
     }
 
     private fun exitCascade() {
         if (!cascade) return
         cascade = false
-        cascadeBtn.text = "Cascade"
         headers.forEach { container.removeView(it) }
         headers.clear()
         tabs.forEachIndexed { idx, t ->
@@ -342,8 +398,7 @@ class MainActivity : Activity() {
     private fun focusCascade(i: Int) {
         if (i !in tabs.indices) return
         cur = i
-        urlBox.setText(web.url ?: "")
-        pcBtn.text = if (tabs[i].desktop) "Mobile" else "PC"
+        urlBox.setText(displayUrl(web.url))
         lastKey = ""; hasVideo = false; playing = false
         js("window.__pip&&__pip.report&&__pip.report()")
         refreshTabs()
@@ -384,8 +439,8 @@ class MainActivity : Activity() {
                 textSize = 12f
                 setPadding(8, 0, 8, 0)
                 text = "${i + 1}. " + (if (t.title.isBlank()) "Tab" else t.title).take(18)
-                setBackgroundColor(Color.parseColor(if (i == cur) "#1A73E8" else "#DDDDDD"))
-                setTextColor(if (i == cur) Color.WHITE else Color.BLACK)
+                setBackgroundColor(if (i == cur) Color.parseColor("#33507F") else SURFACE)
+                setTextColor(if (i == cur) Color.WHITE else Color.parseColor("#B0B4BA"))
                 setOnClickListener { focusCascade(i) }
             }
             container.addView(hb, FrameLayout.LayoutParams(cardW, hh))
@@ -426,6 +481,12 @@ class MainActivity : Activity() {
                 tab.title = t ?: ""
                 refreshTabs()
             }
+            override fun onProgressChanged(v: WebView, p: Int) {
+                if (tabs.isNotEmpty() && v === web) {
+                    progress.progress = p
+                    progress.visibility = if (p in 1..99 && !inPipMode) View.VISIBLE else View.GONE
+                }
+            }
         }
         w.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(v: WebView, req: WebResourceRequest): Boolean {
@@ -449,7 +510,7 @@ class MainActivity : Activity() {
                 reapplyPip(v)
             }
             override fun doUpdateVisitedHistory(v: WebView, u: String, isReload: Boolean) {
-                if (tabs.isNotEmpty() && v === web && !urlBox.hasFocus()) urlBox.setText(u)
+                if (tabs.isNotEmpty() && v === web && !urlBox.hasFocus()) urlBox.setText(displayUrl(u))
             }
             override fun onReceivedError(v: WebView, req: WebResourceRequest, err: WebResourceError) {
                 if (req.isForMainFrame) {
@@ -463,7 +524,7 @@ class MainActivity : Activity() {
         container.addView(w, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         tabs.add(tab)
-        w.loadUrl(url)
+        if (url == HOME) loadHome(w) else w.loadUrl(url)
         return tab
     }
 
@@ -481,20 +542,20 @@ class MainActivity : Activity() {
         }
         cur = i
         tabs.forEachIndexed { idx, t -> t.web.visibility = if (idx == i) View.VISIBLE else View.GONE }
-        urlBox.setText(web.url ?: "")
-        pcBtn.text = if (tabs[i].desktop) "Mobile" else "PC"
+        urlBox.setText(displayUrl(web.url))
         lastKey = ""; hasVideo = false; playing = false
         js("window.__pip&&__pip.report&&__pip.report()")
         refreshTabs()
         web.requestFocus()
     }
 
-    private fun closeCurrentTab() {
-        if (tabs.size <= 1) { load("https://duckduckgo.com"); return }
-        val t = tabs.removeAt(cur)
+    private fun closeTab(i: Int) {
+        if (i !in tabs.indices) return
+        if (tabs.size <= 1) { loadHome(web); return }
+        val t = tabs.removeAt(i)
         container.removeView(t.web)
         t.web.destroy()
-        cur = minOf(cur, tabs.size - 1)
+        if (i < cur) cur-- else if (i == cur) cur = minOf(cur, tabs.size - 1)
         selectTab(cur)
         if (cascade && tabs.size < 2) exitCascade()
     }
@@ -504,13 +565,33 @@ class MainActivity : Activity() {
             if (!::tabRow.isInitialized) return@runOnUiThread
             tabRow.removeAllViews()
             tabs.forEachIndexed { i, t ->
-                val label = (if (t.title.isBlank()) "Tab ${i + 1}" else t.title).take(14)
-                tabRow.addView(Button(this).apply {
-                    text = label
-                    setAllCaps(false)
-                    alpha = if (i == cur) 1f else 0.55f
+                val sel = i == cur
+                val fg = if (sel) Color.WHITE else Color.parseColor("#B0B4BA")
+                val chip = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    background = rounded(if (sel) Color.parseColor("#33507F") else SURFACE, 16)
+                    setPadding(dp(12), 0, dp(2), 0)
                     setOnClickListener { selectTab(i) }
-                })
+                }
+                val tv = TextView(this).apply {
+                    text = if (t.title.isBlank()) "Tab ${i + 1}" else t.title
+                    textSize = 12f
+                    maxLines = 1
+                    maxWidth = dp(110)
+                    ellipsize = TextUtils.TruncateAt.END
+                    setTextColor(fg)
+                }
+                val x = ImageView(this).apply {
+                    setImageResource(R.drawable.ic_close)
+                    setColorFilter(fg)
+                    setPadding(dp(7), dp(7), dp(7), dp(7))
+                    setOnClickListener { closeTab(i) }
+                }
+                chip.addView(tv)
+                chip.addView(x, LinearLayout.LayoutParams(dp(28), dp(28)))
+                tabRow.addView(chip, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, dp(32)).apply { setMargins(0, 0, dp(6), 0) })
             }
         }
     }
@@ -631,6 +712,7 @@ class MainActivity : Activity() {
         val lp = web.layoutParams
         if (lp.width != fullW || lp.height != fh) {
             web.layoutParams = FrameLayout.LayoutParams(fullW, fh)
+            addLog("pip layout window=${rw}x$rh page=${fullW}x$fh scale=${"%.2f".format(s)}")
         }
         web.pivotX = 0f
         web.pivotY = 0f
@@ -669,7 +751,8 @@ class MainActivity : Activity() {
         if (inPip) exitCascade()
         bar.visibility = if (inPip) View.GONE else View.VISIBLE
         tabBar.visibility = if (inPip) View.GONE else View.VISIBLE
-        root.setBackgroundColor(if (inPip) Color.BLACK else Color.WHITE)
+        root.setBackgroundColor(if (inPip) Color.BLACK else BG)
+        if (inPip) progress.visibility = View.GONE
         if (inPip) {
             if (tabs.isNotEmpty()) { web.onResume(); web.resumeTimers() }
             root.post { applyPipScale() }
@@ -699,5 +782,9 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
-    companion object { const val ACTION = "com.example.pipbrowser.PIP_ACTION" }
+    companion object {
+        const val ACTION = "com.example.pipbrowser.PIP_ACTION"
+        const val HOME = "about:home"
+        const val HOME_BASE = "https://home.local/"
+    }
 }

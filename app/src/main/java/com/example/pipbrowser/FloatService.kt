@@ -183,6 +183,7 @@ class FloatService : Service() {
         private fun ib(icon: Int, desc: String, onClick: () -> Unit): ImageButton {
             return ImageButton(ctx).apply {
                 setImageResource(icon)
+                setColorFilter(Color.WHITE)
                 setBackgroundColor(Color.TRANSPARENT)
                 contentDescription = desc
                 setOnClickListener { onClick() }
@@ -193,7 +194,7 @@ class FloatService : Service() {
 
         private fun onState(p: Boolean, h: Boolean, r: Double) {
             playBtn?.setImageResource(
-                if (p) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play)
+                if (p) R.drawable.ic_pause else R.drawable.ic_play)
             if (!ratioLocked && r > 0.0) {
                 ratioLocked = true
                 ratio = r.toFloat().coerceIn(0.5f, 2f)
@@ -314,22 +315,22 @@ class FloatService : Service() {
                 orientation = LinearLayout.HORIZONTAL
                 setBackgroundColor(Color.parseColor("#99000000"))
             }
-            val soundBtn = ib(android.R.drawable.ic_lock_silent_mode_off, "Sound on or off") {}
+            val soundBtn = ib(R.drawable.ic_volume_up, "Sound on or off") {}
             soundBtn.setOnClickListener {
                 web.evaluateJavascript("window.__pip&&__pip.toggleSound()") { r ->
                     soundBtn.setImageResource(
-                        if (r == "true") android.R.drawable.ic_lock_silent_mode_off
-                        else android.R.drawable.ic_lock_silent_mode)
+                        if (r == "true") R.drawable.ic_volume_up
+                        else R.drawable.ic_volume_off)
                 }
             }
-            val pb = ib(android.R.drawable.ic_media_pause, "Play or pause") { js("window.__pip&&__pip.toggle()") }
+            val pb = ib(R.drawable.ic_pause, "Play or pause") { js("window.__pip&&__pip.toggle()") }
             playBtn = pb
             listOf(
-                ib(android.R.drawable.ic_media_previous, "Previous") { js("window.__pip&&__pip.go(-1)") },
+                ib(R.drawable.ic_skip_prev, "Previous") { js("window.__pip&&__pip.go(-1)") },
                 pb,
-                ib(android.R.drawable.ic_media_next, "Next") { js("window.__pip&&__pip.go(1)") },
+                ib(R.drawable.ic_skip_next, "Next") { js("window.__pip&&__pip.go(1)") },
                 soundBtn,
-                ib(android.R.drawable.ic_menu_close_clear_cancel, "Close") { close() }
+                ib(R.drawable.ic_close, "Close") { close() }
             ).forEach {
                 controls.addView(it, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
             }

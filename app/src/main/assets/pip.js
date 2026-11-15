@@ -127,6 +127,7 @@
       }
     } finally {
       L('go ' + dir + ' via ' + how + ' ok=' + ok);
+      if (on) dbg('after-go');
       busy = false; report(true);
       if (ok) ensurePlay();
     }
@@ -141,6 +142,17 @@
   const hold = () => { holdUntil = Date.now() + 4000; };
 
   // ---------- PiP overlay: draws the active video full-window, page keeps running underneath ----------
+  const dbg = tag => {
+    try {
+      const r = cv ? cv.getBoundingClientRect() : null;
+      const vv = window.visualViewport;
+      L(tag + ' inner=' + innerWidth + 'x' + innerHeight +
+        (vv ? ' vv=' + Math.round(vv.width) + 'x' + Math.round(vv.height) + '@' + Math.round(vv.offsetLeft) + ',' + Math.round(vv.offsetTop) + ' s=' + vv.scale.toFixed(2) : '') +
+        (r ? ' cv=' + Math.round(r.left) + ',' + Math.round(r.top) + ' ' + Math.round(r.width) + 'x' + Math.round(r.height) : ' cv=none') +
+        ' scrollY=' + Math.round(window.scrollY));
+    } catch (e) { L('dbg err ' + e); }
+  };
+  let lastT = '';
   function setPip(flag) {
     flag = !!flag;
     if (flag && on && cv && cv.isConnected) return;   // already showing
@@ -158,6 +170,12 @@
       if (!cv.isConnected && document.documentElement) document.documentElement.appendChild(cv);
       const v = best() || lastV, w = innerWidth, h = innerHeight;
       if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+      // keep the picture layer exactly over what is visible (page zoom / visual viewport offset)
+      const vv = window.visualViewport;
+      if (vv) {
+        const t = 'translate(' + vv.offsetLeft + 'px,' + vv.offsetTop + 'px) scale(' + (1 / (vv.scale || 1)) + ')';
+        if (t !== lastT) { cv.style.transformOrigin = '0 0'; cv.style.transform = t; lastT = t; }
+      }
       const c = cv.getContext('2d');
       c.fillStyle = '#000'; c.fillRect(0, 0, w, h);
       if (v && v.videoWidth) {
@@ -168,6 +186,7 @@
       raf = requestAnimationFrame(draw);
     };
     draw();
+    setTimeout(() => dbg('pip-on'), 700);
   }
 
   // if the site pauses the video on its own while we are in PiP / leaving the app, resume it
