@@ -19,6 +19,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.Settings
 import android.text.InputType
 import android.util.Rational
 import android.view.InputDevice
@@ -126,8 +127,8 @@ class MainActivity : Activity() {
         fun log(m: String) { addLog("js: $m") }
 
         @JavascriptInterface
-        fun swipe(next: Boolean, slow: Boolean) {
-            runOnUiThread { if (tabs.isNotEmpty() && owner === web) doSwipe(next, slow) }
+        fun swipe(next: Boolean, style: Int) {
+            runOnUiThread { if (tabs.isNotEmpty() && owner === web) doSwipe(next, style) }
         }
     }
 
@@ -161,12 +162,21 @@ class MainActivity : Activity() {
             text = "PiP"
             setOnClickListener { enterPip() }
         }
+        val floatBtn = Button(this).apply {
+            text = "Float"
+            setAllCaps(false)
+            setOnClickListener { startFloat() }
+        }
+        listOf(logBtn, pcBtn, pipBtn, floatBtn).forEach {
+            it.minWidth = 0; it.minimumWidth = 0; it.textSize = 12f; it.setPadding(14, 0, 14, 0)
+        }
         bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             addView(urlBox, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             addView(logBtn)
             addView(pcBtn)
             addView(pipBtn)
+            addView(floatBtn)
         }
 
         tabRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -239,6 +249,44 @@ class MainActivity : Activity() {
         else registerReceiver(receiver, filter)
 
         newTab(intent?.dataString ?: "https://m.youtube.com/shorts")
+    }
+
+    // ---------- floating window: current video in a small window drawn over other apps ----------
+    private fun startFloat() {
+        if (!Settings.canDrawOverlays(this)) {
+            Toast.makeText(this,
+                "Turn on \"Allow display over other apps\" for this app, then come back and press Float again.",
+                Toast.LENGTH_LONG).show()
+            try {
+                startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName")))
+            } catch (e: Exception) { addLog("overlay settings failed: ${e.message}") }
+            return
+        }
+        val pageUrl = web.url
+        if (pageUrl.isNullOrBlank()) return
+        val desktop = tabs[cur].desktop
+        web.evaluateJavascript(
+            "(function(){try{return window.__pip&&__pip.time?__pip.time():0}catch(e){return 0}})()"
+        ) { r ->
+            val t = r?.trim('"')?.toDoubleOrNull() ?: 0.0
+            val i = Intent(this, FloatService::class.java)
+                .setAction(FloatService.ACTION_ADD)
+                .putExtra("url", pageUrl)
+                .putExtra("desktop", desktop)
+                .putExtra("startAt", t)
+            try {
+                startForegroundService(i)
+                addLog("float added: $pageUrl at ${t.toInt()}s")
+                js("window.__pip&&__pip.pause()")   // the floating copy plays instead
+                Toast.makeText(this,
+                    "Floating window added. Drag it, pinch to resize, X closes it.",
+                    Toast.LENGTH_LONG).show()
+            } catch (e: Exception) {
+                addLog("float failed: ${e.message}")
+                Toast.makeText(this, "Could not start floating window", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     // ---------- second window (separate task, can sit next to this one in split-screen) ----------
@@ -480,26 +528,47 @@ class MainActivity : Activity() {
         web.requestFocus()
     }
 
+    private val touchDeviceId: Int by lazy {
+        InputDevice.getDeviceIds().firstOrNull {
+            ((InputDevice.getDevice(it)?.sources ?: 0) and InputDevice.SOURCE_TOUCHSCREEN) == InputDevice.SOURCE_TOUCHSCREEN
+        } ?: 0
+    }
+
     // real finger swipe on the page (works on touch-based short-video feeds)
-    private fun doSwipe(next: Boolean, slow: Boolean) {
+    // style 0 = normal, 1 = long and smooth, 2 = quick flick
+    private fun doSwipe(next: Boolean, style: Int) {
         val w = web.width.toFloat()
         val h = web.height.toFloat()
         if (w <= 0f || h <= 0f) return
-        val x = w / 2f
-        val a = if (slow) 0.72f else 0.75f
-        val b = if (slow) 0.28f else 0.25f
+        val fx = w / 2f
+        val a = when (style) { 1 -> 0.85f; 2 -> 0.72f; else -> 0.70f }
+        val b = when (style) { 1 -> 0.15f; 2 -> 0.28f; else -> 0.25f }
+        val steps = when (style) { 1 -> 16; 2 -> 5; else -> 12 }
+        val gap = when (style) { 1 -> 16L; 2 -> 12L; else -> 18L }
         val y0 = if (next) h * a else h * b
         val y1 = if (next) h * b else h * a
-        val steps = if (slow) 5 else 12      // "slow" flag now means a quick flick
-        val gap = if (slow) 12L else 18L
         val down = SystemClock.uptimeMillis()
-        fun send(action: Int, y: Float) {
-            val e = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, x, y, 0)
-            e.source = InputDevice.SOURCE_TOUCHSCREEN
+        fun send(action: Int, fy: Float) {
+            // describe the touch as a real finger on a real touchscreen
+            val pp = MotionEvent.PointerProperties().apply {
+                id = 0
+                toolType = MotionEvent.TOOL_TYPE_FINGER
+            }
+            val pc = MotionEvent.PointerCoords().apply {
+                this.x = fx
+                this.y = fy
+                pressure = if (action == MotionEvent.ACTION_UP) 0f else 1f
+                size = 0.1f
+            }
+            val e = MotionEvent.obtain(
+                down, SystemClock.uptimeMillis(), action, 1,
+                arrayOf(pp), arrayOf(pc), 0, 0, 1f, 1f,
+                touchDeviceId, 0, InputDevice.SOURCE_TOUCHSCREEN, 0
+            )
             web.dispatchTouchEvent(e)
             e.recycle()
         }
-        addLog("swipe ${if (next) "next" else "prev"}${if (slow) " (flick)" else ""}")
+        addLog("swipe ${if (next) "next" else "prev"} style=$style")
         send(MotionEvent.ACTION_DOWN, y0)
         for (i in 1..steps) ui.postDelayed({ send(MotionEvent.ACTION_MOVE, y0 + (y1 - y0) * i / steps) }, i * gap)
         ui.postDelayed({ send(MotionEvent.ACTION_UP, y1) }, (steps + 1) * gap)

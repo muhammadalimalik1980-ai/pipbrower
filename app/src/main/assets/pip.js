@@ -40,6 +40,9 @@
   const isShort = v => SHORT.test(location.href) || !!(v && v.videoHeight > v.videoWidth);
   const click = sel => { const e = document.querySelector(sel); if (e) { e.click(); return true; } return false; };
   const ADAPT = [
+    { re: /youtube\.com\/shorts/,
+      next: () => click('#navigation-button-down button, #navigation-button-down'),
+      prev: () => click('#navigation-button-up button, #navigation-button-up') },
     { re: /youtube\.com\/watch/,
       next: () => click('.ytp-next-button, button[aria-label="Next video"], button[aria-label="Next"]'),
       prev: () => click('.ytp-prev-button, button[aria-label="Previous video"], button[aria-label="Previous"]') },
@@ -107,8 +110,9 @@
       if (a && (dir > 0 ? a.next() : a.prev())) { ok = await changed(before); how = 'adapter'; }
       if (!ok && short) {
         if (A && A.swipe) {
-          A.swipe(dir > 0, false); ok = await changed(before, 15); how = 'swipe';
-          if (!ok) { A.swipe(dir > 0, true); ok = await changed(before, 15); how = 'flick'; }
+          A.swipe(dir > 0, 0); ok = await changed(before, 12); how = 'swipe';
+          if (!ok) { A.swipe(dir > 0, 1); ok = await changed(before, 12); how = 'long-swipe'; }
+          if (!ok) { A.swipe(dir > 0, 2); ok = await changed(before, 12); how = 'flick'; }
           if (!ok) { scrollFeed(before.v, dir); ok = await changed(before, 10); how = 'scroll'; }
           if (!ok) { pressKey(dir > 0 ? 'ArrowDown' : 'ArrowUp'); ok = await changed(before, 10); how = 'key'; }
         } else {
@@ -138,7 +142,9 @@
 
   // ---------- PiP overlay: draws the active video full-window, page keeps running underneath ----------
   function setPip(flag) {
-    on = !!flag;
+    flag = !!flag;
+    if (flag && on && cv && cv.isConnected) return;   // already showing
+    on = flag;
     L('pip overlay ' + on);
     if (!on) { cancelAnimationFrame(raf); if (cv) cv.remove(); return; }
     if (!cv) {
@@ -146,6 +152,7 @@
       cv.style.cssText = 'position:fixed;left:0;top:0;width:100vw;height:100vh;background:#000;z-index:2147483647;pointer-events:none';
     }
     document.documentElement.appendChild(cv);
+    cancelAnimationFrame(raf);
     const draw = () => {
       if (!on) return;
       const v = best() || lastV, w = innerWidth, h = innerHeight;
@@ -203,5 +210,19 @@
   setInterval(() => report(false), 2000);
   report(true);
 
-  window.__pip = { go, toggle, pause, setPip, hold, report: () => report(true) };
+  // used when a page is moved into a floating window: continue from the same time
+  const startAt = t => {
+    if (!(t > 1)) return;
+    let tries = 0;
+    const id = setInterval(() => {
+      const v = best() || lastV;
+      if (v && v.readyState > 0 && isFinite(v.duration) && v.duration > t + 1) {
+        try { v.currentTime = t; } catch (e) {}
+        clearInterval(id);
+      } else if (++tries > 40) clearInterval(id);
+    }, 250);
+  };
+  const time = () => { const v = best() || lastV; return v ? v.currentTime : 0; };
+
+  window.__pip = { go, toggle, pause, setPip, hold, startAt, time, report: () => report(true) };
 })();
